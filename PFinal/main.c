@@ -39,16 +39,20 @@ void cerrarPuerta();
 void actualizarIndiceHistorial(uint8_t idx);
 void actualizarHistorial();
 void leerHistorial();
+void sonarBuzzer();
+void apagarBuzzer();
+
 
 volatile uint8_t hora = 0;
 volatile uint8_t minuto = 0;
 volatile uint8_t segundo = 0;
 volatile uint8_t contadorSegundosReal = 0;  // Contador de segundos reales
-volatile uint8_t contadorPuertaAbierta = 0;
+volatile uint8_t tiempoPuertaAbierta = 0;
 char hora_str[12];
 volatile uint8_t actualizarHora = 0;
 bool puertaAbierta = false;
 bool leyendoHistorial = false;
+bool buzzerActivado = false;
 uint8_t saved_uid[4];
 uint8_t known_uid[4] = {0x3E, 0x1B, 0xED, 0x00};
 uint8_t known_uid2[4] = {0x08, 0x13, 0x24, 0x91};
@@ -56,12 +60,15 @@ uint8_t known_uid2[4] = {0x08, 0x13, 0x24, 0x91};
 
 
 int main(void){
+	   DDRD |= (1 << PD0);   // PD0 como salida
+	   PORTD &= ~(1 << PD0); // Inicialmente apagado
+		
 	// Inicializacion de puerto D para Teclado Matricial 4x4
 	DDRD |=0b00001111; //D0-D3 outputs
 	DDRD &=0b00001111; //D4-D7 inputs
 	PORTD |=0b11110000; //D4-D7 Pull ups
-	PORTD |=0b00001111; //D0-D3 outputs high
-	GPIO_ConfigPin(PORT_D, 0, OUTPUT);
+	PORTD |=0b00001111; //D1-D3 outputs high
+	//GPIO_ConfigPin(PORT_D, 0, OUTPUT);
 	PORTD &= ~(1 << PORTD0); 
 	char pressedKey = 'A'; // Inicializa variable de lectura de tecla presionada
 	
@@ -83,6 +90,7 @@ int main(void){
 	while(1){
 		pressedKey = PressedKey();
 		
+		
 		//if (read_rfid_tag()) {
 			//if (compare_uids(saved_uid, known_uid)) {
 				//UART_string("Authorized tag detected!\r\n");
@@ -93,6 +101,11 @@ int main(void){
 		//}
 		
 		// Se actualiza el reloj si paso un minuto
+		
+		if(puertaAbierta && tiempoPuertaAbierta>=60 ){
+			sonarBuzzer();
+		}
+		
 		if (actualizarHora && !leyendoHistorial) {
 			actualizarHora = 0;
 
@@ -192,14 +205,25 @@ void timer1_init() {
 
 
 ISR(TIMER1_COMPA_vect) {
+	
+	
 	contadorSegundosReal++;
+	
 
+	
 	if (contadorSegundosReal >= 10) {
 		contadorSegundosReal = 0;
 
 		minuto++;
-		segundo = 0;  // Reiniciamos segundos simulados (si se muestran)
-
+		segundo = 0;  
+		
+			if(puertaAbierta){
+				tiempoPuertaAbierta++;
+				}else{
+				tiempoPuertaAbierta=0;
+				apagarBuzzer();
+			}
+		
 		if (minuto >= 60) {
 			minuto = 0;
 			hora++;
@@ -244,14 +268,14 @@ char PressedKey(void) {
 	char key = 0;
 
 	// Escanea cada fila del teclado
-	PORTD = 0b11110111; _delay_ms(1);
+	PORTD = 0b11110110; _delay_ms(1);
 	if (!(PIND & (1 << PIND7))) key = '1';
 	else if (!(PIND & (1 << PIND6))) key = '4';
 	else if (!(PIND & (1 << PIND5))) key = '7';
 	else if (!(PIND & (1 << PIND4))) key = '*';
 
 	if (!key) {
-		PORTD = 0b11111011; _delay_ms(1);
+		PORTD = 0b11111010; _delay_ms(1);
 		if (!(PIND & (1 << PIND7))) key = '2';
 		else if (!(PIND & (1 << PIND6))) key = '5';
 		else if (!(PIND & (1 << PIND5))) key = '8';
@@ -259,20 +283,20 @@ char PressedKey(void) {
 	}
 
 	if (!key) {
-		PORTD = 0b11111101; _delay_ms(1);
+		PORTD = 0b11111100; _delay_ms(1);
 		if (!(PIND & (1 << PIND7))) key = '3';
 		else if (!(PIND & (1 << PIND6))) key = '6';
 		else if (!(PIND & (1 << PIND5))) key = '9';
 		else if (!(PIND & (1 << PIND4))) key = '#';
 	}
 
-	if (!key) {
+	/*if (!key) {
 		PORTD = 0b11111110; _delay_ms(1);
 		if (!(PIND & (1 << PIND7))) key = 'A';
 		else if (!(PIND & (1 << PIND6))) key = 'B';
 		else if (!(PIND & (1 << PIND5))) key = 'C';
 		else if (!(PIND & (1 << PIND4))) key = 'D';
-	}
+	}*/
 
 	// Lógica de detección de nueva pulsación
 	if (key && keyReleased) {
@@ -302,6 +326,7 @@ void validarPasswd(uint8_t passwd[]){
 		lcd_write_word("Succesful Code!");
 		lcd_goto_xy(1,0);
 		lcd_write_word("Opening Door...");
+		_delay_ms(15000);
 		abrirPuerta();
 	} else{
 		lcd_clear();
@@ -309,7 +334,7 @@ void validarPasswd(uint8_t passwd[]){
 		lcd_write_word("Incorrect Code!");
 		lcd_goto_xy(1,0);
 		lcd_write_word("Try again...");
-		_delay_ms(2000);
+		_delay_ms(15000);
 		mensajeHoraPasswd();
 	}
 }
@@ -332,18 +357,19 @@ void mensajeHoraPasswd(void){
 
 void abrirPuerta(void){
 	puertaAbierta = true;
-	
 	//Logica abrir puerta
-	
 	lcd_clear();
 	lcd_goto_xy(0,0);
 	lcd_write_word("Status Door:");
 	lcd_goto_xy(1,0);
 	lcd_write_word("OPEN");
-	GPIO_EscribirPin(PORTD, 0, HIGH);
+	//GPIO_EscribirPin(PORTD, 0, HIGH);
+	
 	servoAngulo(37);
 	
+	
 	actualizarHistorial();
+	
 }
 
 void cerrarPuerta(void){
@@ -421,3 +447,12 @@ void UART_print_dec(uint8_t num) {
 	snprintf(buf, sizeof(buf), "%u", num);
 	UART_string(buf);
 }
+
+void sonarBuzzer(){
+	PORTD |= (1 << PD0);
+}
+
+void apagarBuzzer(){
+	PORTD &= ~(1 << PD0);
+}
+
